@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>国际跳棋 - 人机对弈</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎯 国际跳棋 AI 对弈系统</h1>
+            <p class="subtitle">2026辽宁省计算机博弈大赛</p>
+        </header>
+
+        <div class="main-content">
+            <!-- 左侧：游戏控制面板 -->
+            <aside class="control-panel">
+                <div class="panel-section">
+                    <h2>🎮 游戏控制</h2>
+                    <button id="newGameBtn" class="btn btn-primary">新游戏</button>
+                    <button id="undoBtn" class="btn btn-secondary">悔棋</button>
+                    <button id="hintBtn" class="btn btn-secondary">提示</button>
+                </div>
+
+                <div class="panel-section">
+                    <h2>⚙️ 游戏设置</h2>
+                    <div class="setting-item">
+                        <label for="playerColor">玩家颜色：</label>
+                        <select id="playerColor">
+                            <option value="black">黑方（先手）</option>
+                            <option value="white">白方（后手）</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="aiLevel">AI难度：</label>
+                        <select id="aiLevel">
+                            <option value="1">简单（1秒）</option>
+                            <option value="3" selected>中等（3秒）</option>
+                            <option value="5">困难（5秒）</option>
+                            <option value="10">专家（10秒）</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h2>📊 游戏状态</h2>
+                    <div class="status-item">
+                        <span class="label">当前回合：</span>
+                        <span id="currentPlayer" class="value">黑方</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">黑方棋子：</span>
+                        <span id="blackPieces" class="value">20</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">白方棋子：</span>
+                        <span id="whitePieces" class="value">20</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">走法数：</span>
+                        <span id="moveCount" class="value">0</span>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h2>🤖 AI思考</h2>
+                    <div id="aiThinking" class="ai-thinking">
+                        <div class="thinking-item">
+                            <span class="label">搜索深度：</span>
+                            <span id="searchDepth" class="value">-</span>
+                        </div>
+                        <div class="thinking-item">
+                            <span class="label">搜索节点：</span>
+                            <span id="nodesSearched" class="value">-</span>
+                        </div>
+                        <div class="thinking-item">
+                            <span class="label">评估分数：</span>
+                            <span id="evalScore" class="value">-</span>
+                        </div>
+                        <div class="thinking-item">
+                            <span class="label">用时：</span>
+                            <span id="thinkTime" class="value">-</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 中间：棋盘 -->
+            <main class="board-container">
+                <div id="board" class="board">
+                    <!-- 棋盘将由JavaScript动态生成 -->
+                </div>
+                <div id="message" class="message"></div>
+            </main>
+
+            <!-- 右侧：走法历史 -->
+            <aside class="history-panel">
+                <h2>📜 走法历史</h2>
+                <div id="moveHistory" class="move-history">
+                    <p class="empty-history">暂无走法记录</p>
+                </div>
+            </aside>
+        </div>
+
+        <footer>
+            <p>© 2026 国际跳棋AI引擎 | 沈阳航空航天大学</p>
+        </footer>
+    </div>
+
+    <script src="checkers.js"></script>
+</body>
+</html>
