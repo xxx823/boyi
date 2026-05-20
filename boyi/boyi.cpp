@@ -34,21 +34,21 @@ inline int __builtin_ctzll(uint64_t x) {
 struct Move {
     int from;              // 起始格子（0-49）
     int to;                // 目标格子（0-49）
-    int captures[12];      // 被吃掉的棋子位置（最多12个连续跳吃）
+    int captures[20];      // 被吃掉的棋子位置（最多20个连续跳吃）
     int num_captures;      // 吃子数量
     bool is_promotion;     // 是否升王
     int score;             // 走法排序分数（用于搜索优化）
     
     // 默认构造函数
     Move() : from(-1), to(-1), num_captures(0), is_promotion(false), score(0) {
-        for (int i = 0; i < 12; ++i) {
+        for (int i = 0; i < 20; ++i) {
             captures[i] = -1;
         }
     }
     
     // 带参数的构造函数
     Move(int f, int t) : from(f), to(t), num_captures(0), is_promotion(false), score(0) {
-        for (int i = 0; i < 12; ++i) {
+        for (int i = 0; i < 20; ++i) {
             captures[i] = -1;
         }
     }
@@ -111,7 +111,7 @@ struct Move {
                 move.num_captures = squares.size() - 2;
                 
                 // 填充被吃掉的棋子位置（这里简化处理，实际需要根据棋盘计算）
-                for (size_t i = 1; i < squares.size() - 1 && i <= 12; ++i) {
+                for (size_t i = 1; i < squares.size() - 1 && i <= 20; ++i) {
                     move.captures[i - 1] = squares[i];
                 }
             }
@@ -1745,8 +1745,8 @@ public:
             return true;
         }
         
-        // 2. 50步规则（50步内无吃子）
-        if (halfmove_clock >= 100) {  // 双方各50步
+        // 2. 40步规则（40步内无吃子）
+        if (halfmove_clock >= 80) {  // 双方各40步
             return true;
         }
         
@@ -2557,12 +2557,6 @@ bool MoveGenerator::can_capture_from(const Board& board, int square) {
     for (int dir = 0; dir < 4; ++dir) {
         int offset = DIRECTIONS[dir];
         
-        // 普通棋子只能向前吃
-        if (!is_king) {
-            if (is_black && (offset == -4 || offset == -6)) continue;  // 黑方不能向下吃
-            if (!is_black && (offset == 6 || offset == 4)) continue;   // 白方不能向上吃
-        }
-        
         int adjacent = square + offset;
         if (!is_valid_square(adjacent)) continue;
         
@@ -2611,7 +2605,7 @@ void MoveGenerator::generate_man_captures(const Board& board, int square,
                                          uint64_t captured, MoveList& moves, Move& current_move) {
     bool is_black = (board.current_player == 1);
     uint64_t opponent_pieces = is_black ? board.get_all_white() : board.get_all_black();
-    uint64_t empty = board.get_empty_squares() | captured;  // 已吃掉的棋子视为空格
+    uint64_t empty = board.get_empty_squares();  // 只使用真正的空格
     
     bool found_capture = false;
     
@@ -2672,8 +2666,7 @@ void MoveGenerator::generate_king_captures(const Board& board, int square,
     bool is_black = (board.current_player == 1);
     uint64_t opponent_pieces = is_black ? board.get_all_white() : board.get_all_black();
     uint64_t all_pieces = board.get_all_black() | board.get_all_white();
-    uint64_t empty = ~all_pieces & ((1ULL << 50) - 1);
-    empty |= captured;  // 已吃掉的棋子视为空格
+    uint64_t empty = ~all_pieces & ((1ULL << 50) - 1);  // 只使用真正的空格
     
     bool found_capture = false;
     

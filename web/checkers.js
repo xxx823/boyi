@@ -63,6 +63,14 @@ class CheckersGame {
     generateMoves(color) {
         const moves = [];
         
+        console.log(`=== generateMoves for color ${color} ===`);
+        console.log('当前棋盘状态:');
+        for (let i = 0; i < 50; i++) {
+            if (this.board[i]) {
+                console.log(`  位置${i}(编号${i+1}): color=${this.board[i].color}, isKing=${this.board[i].isKing}`);
+            }
+        }
+        
         // 遍历所有己方棋子
         for (let from = 0; from < 50; from++) {
             const piece = this.board[from];
@@ -72,6 +80,8 @@ class CheckersGame {
             const pieceMoves = this.generatePieceMoves(from, piece);
             moves.push(...pieceMoves);
         }
+        
+        console.log(`总共生成 ${moves.length} 个走法`);
         
         // 检查是否有吃子走法（强制吃子规则）
         const captureMoves = moves.filter(m => m.captures && m.captures.length > 0);
@@ -113,14 +123,16 @@ class CheckersGame {
         for (const dir of directions) {
             // 普通棋子非吃子时只能向前
             if (!piece.isKing) {
-                // 黑方（color=1）在顶部，向下移动（row增大，dr>0）
-                // 白方（color=-1）在底部，向上移动（row减小，dr<0）
+                // 黑方（color=1）在顶部（rows 0-3），只能向下移动（row增大，dr>0）
+                // 所以要跳过向上的方向（dr<0）
                 if (piece.color === 1 && dir.dr < 0) {
-                    console.log(`  跳过方向(${dir.dr},${dir.dc}) - 黑方不能向上`);
+                    console.log(`  跳过方向(${dir.dr},${dir.dc}) - 黑方只能向下，不能向上`);
                     continue;
                 }
+                // 白方（color=-1）在底部（rows 6-9），只能向上移动（row减小，dr<0）
+                // 所以要跳过向下的方向（dr>0）
                 if (piece.color === -1 && dir.dr > 0) {
-                    console.log(`  跳过方向(${dir.dr},${dir.dc}) - 白方不能向下`);
+                    console.log(`  跳过方向(${dir.dr},${dir.dc}) - 白方只能向上，不能向下`);
                     continue;
                 }
             }
@@ -182,7 +194,12 @@ class CheckersGame {
     }
     
     // 生成吃子走法（支持连续跳吃）
-    generateCaptureMoves(from, piece, row, col, capturedSoFar, visitedSquares) {
+    generateCaptureMoves(from, piece, row, col, capturedSoFar, visitedSquares, originalFrom) {
+        // originalFrom 用于记录整个跳吃序列的起点
+        if (originalFrom === undefined) {
+            originalFrom = from;
+        }
+        
         const moves = [];
         const directions = [
             { dr: -1, dc: -1 }, // 左上
@@ -223,8 +240,8 @@ class CheckersGame {
                             const landIndex = this.getSquareIndex(landRow, landCol);
                             if (landIndex === -1) break;
                             
-                            // 落点必须为空且未访问过
-                            if (this.board[landIndex] || visitedSquares.has(landIndex)) break;
+                            // 落点必须为空（不检查是否访问过，允许路径交叉）
+                            if (this.board[landIndex]) break;
                             if (capturedSoFar.includes(landIndex)) break;
                             
                             foundCapture = true;
@@ -234,14 +251,14 @@ class CheckersGame {
                             
                             // 尝试继续跳吃
                             const furtherMoves = this.generateCaptureMoves(
-                                landIndex, piece, landRow, landCol, newCaptured, newVisited
+                                landIndex, piece, landRow, landCol, newCaptured, newVisited, originalFrom
                             );
                             
                             if (furtherMoves.length > 0) {
                                 moves.push(...furtherMoves);
                             } else {
                                 moves.push({
-                                    from: from,
+                                    from: originalFrom,
                                     to: landIndex,
                                     captures: newCaptured
                                 });
@@ -251,49 +268,81 @@ class CheckersGame {
                     }
                 }
             } else {
-                // 普通棋子的吃子：只能跳一格
+                // 普通棋子的吃子：只能跳一格，但吃子时可以向任意方向
                 const enemyRow = row + dir.dr;
                 const enemyCol = col + dir.dc;
                 
-                if (enemyRow < 0 || enemyRow >= 10 || enemyCol < 0 || enemyCol >= 10) continue;
+                console.log(`    检查吃子方向(${dir.dr},${dir.dc}): (${row},${col}) -> (${enemyRow},${enemyCol})`);
+                
+                if (enemyRow < 0 || enemyRow >= 10 || enemyCol < 0 || enemyCol >= 10) {
+                    console.log(`      敌方位置越界`);
+                    continue;
+                }
                 
                 const enemyIndex = this.getSquareIndex(enemyRow, enemyCol);
-                if (enemyIndex === -1) continue;
+                if (enemyIndex === -1) {
+                    console.log(`      敌方位置是白格`);
+                    continue;
+                }
                 
                 const enemyPiece = this.board[enemyIndex];
+                console.log(`      敌方位置索引${enemyIndex}, 棋子:`, enemyPiece);
                 
                 // 必须是对方棋子且未被吃掉
-                if (!enemyPiece || enemyPiece.color === piece.color) continue;
-                if (capturedSoFar.includes(enemyIndex)) continue;
+                if (!enemyPiece || enemyPiece.color === piece.color) {
+                    console.log(`      不是对方棋子`);
+                    continue;
+                }
+                if (capturedSoFar.includes(enemyIndex)) {
+                    console.log(`      该棋子已被吃掉（屏障）`);
+                    continue;
+                }
                 
                 // 检查落点
                 const landRow = enemyRow + dir.dr;
                 const landCol = enemyCol + dir.dc;
                 
-                if (landRow < 0 || landRow >= 10 || landCol < 0 || landCol >= 10) continue;
+                console.log(`      落点: (${landRow},${landCol})`);
+                
+                if (landRow < 0 || landRow >= 10 || landCol < 0 || landCol >= 10) {
+                    console.log(`      落点越界`);
+                    continue;
+                }
                 
                 const landIndex = this.getSquareIndex(landRow, landCol);
-                if (landIndex === -1) continue;
+                if (landIndex === -1) {
+                    console.log(`      落点是白格`);
+                    continue;
+                }
                 
-                // 落点必须为空且未访问过
-                if (this.board[landIndex] || visitedSquares.has(landIndex)) continue;
-                if (capturedSoFar.includes(landIndex)) continue;
+                console.log(`      落点索引${landIndex}`);
                 
+                // 落点必须为空（不检查是否访问过，允许路径交叉）
+                const landPiece = this.board[landIndex];
+                if (landPiece && !capturedSoFar.includes(landIndex)) {
+                    console.log(`      落点有棋子且未被吃掉`);
+                    continue;
+                }
+                
+                console.log(`      ✓ 可以吃子！`);
                 foundCapture = true;
                 const newCaptured = [...capturedSoFar, enemyIndex];
                 const newVisited = new Set(visitedSquares);
                 newVisited.add(from);
                 
-                // 尝试继续跳吃
+                // 尝试继续跳吃（注意：吃子时可以向任意方向）
+                console.log(`      尝试从${landIndex}继续跳吃，已吃:`, newCaptured);
                 const furtherMoves = this.generateCaptureMoves(
-                    landIndex, piece, landRow, landCol, newCaptured, newVisited
+                    landIndex, piece, landRow, landCol, newCaptured, newVisited, originalFrom
                 );
+                
+                console.log(`      继续跳吃结果: ${furtherMoves.length}个走法`);
                 
                 if (furtherMoves.length > 0) {
                     moves.push(...furtherMoves);
                 } else {
                     moves.push({
-                        from: from,
+                        from: originalFrom,
                         to: landIndex,
                         captures: newCaptured
                     });
@@ -306,13 +355,26 @@ class CheckersGame {
 
     // 执行走法
     makeMove(move) {
-        if (this.gameOver) return false;
+        console.log('=== makeMove ===');
+        console.log('走法:', move);
+        console.log('游戏结束?', this.gameOver);
+        
+        if (this.gameOver) {
+            console.log('游戏已结束，拒绝走法');
+            return false;
+        }
         
         const piece = this.board[move.from];
-        if (!piece) return false;
+        console.log('起始位置棋子:', piece);
+        
+        if (!piece) {
+            console.log('起始位置没有棋子，拒绝走法');
+            return false;
+        }
         
         // 移除被吃的棋子
         if (move.captures) {
+            console.log('吃掉的棋子:', move.captures);
             for (const captureIndex of move.captures) {
                 this.board[captureIndex] = null;
             }
@@ -321,14 +383,20 @@ class CheckersGame {
         // 移动棋子
         this.board[move.to] = piece;
         this.board[move.from] = null;
+        console.log(`棋子从${move.from}移动到${move.to}`);
         
         // 检查升王
         const { row } = this.getSquareCoords(move.to);
-        // 黑方到达第0行（顶部），白方到达第9行（底部）
+        console.log(`目标位置行号: ${row}`);
+        
+        // 黑方（在顶部）到达第9行（白方底线）升王
+        // 白方（在底部）到达第0行（黑方底线）升王
         if (!piece.isKing) {
-            if (piece.color === 1 && row === 0) {
+            if (piece.color === 1 && row === 9) {
+                console.log('黑方升王！');
                 piece.isKing = true;
-            } else if (piece.color === -1 && row === 9) {
+            } else if (piece.color === -1 && row === 0) {
+                console.log('白方升王！');
                 piece.isKing = true;
             }
         }
@@ -612,10 +680,13 @@ class CheckersUI {
         
         const moves = this.game.generateMoves(this.game.currentPlayer);
         console.log('本地AI生成的走法数量:', moves.length);
+        console.log('所有走法:', moves);
         
         if (moves.length > 0) {
             const randomMove = moves[Math.floor(Math.random() * moves.length)];
             console.log('本地AI选择的走法:', randomMove);
+            console.log('  from位置的棋子:', this.game.board[randomMove.from]);
+            console.log('  to位置的棋子:', this.game.board[randomMove.to]);
             
             const success = this.game.makeMove(randomMove);
             console.log('走法执行结果:', success);
