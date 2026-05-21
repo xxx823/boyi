@@ -17,7 +17,7 @@ app.use(express.static(path.join(__dirname, '../web')));
 class CheckersEngine {
     constructor() {
         this.process = null;
-        this.exePath = path.join(__dirname, '../x64/Debug/boyi.exe');
+        this.exePath = path.join(__dirname, '../x64/Release/boyi.exe');
         this.isReady = false;
         this.pendingRequests = [];
     }

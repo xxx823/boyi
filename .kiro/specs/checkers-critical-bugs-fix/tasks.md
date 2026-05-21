@@ -111,9 +111,9 @@
 
 ## Phase 3: Implementation
 
-- [ ] 3. Fix Bug 1: Array Overflow Risk
+- [x] 3. Fix Bug 1: Array Overflow Risk
 
-  - [ ] 3.1 Expand captures array from 12 to 20 elements
+  - [x] 3.1 Expand captures array from 12 to 20 elements
     - Change line 36 in Move structure: `int captures[12];` → `int captures[20];`
     - Update line 42 loop: `for (int i = 0; i < 12; ++i)` → `for (int i = 0; i < 20; ++i)`
     - Update line 49 loop: `for (int i = 0; i < 12; ++i)` → `for (int i = 0; i < 20; ++i)`
@@ -123,7 +123,7 @@
     - _Preservation: Capture sequences with ≤12 jumps continue to work exactly as before_
     - _Requirements: 2.1, 2.2, 3.1, 3.2, 3.3_
 
-  - [ ] 3.2 Verify Bug 1 exploration test now passes
+  - [x] 3.2 Verify Bug 1 exploration test now passes
     - **Property 1: Expected Behavior** - Array Overflow Prevention
     - **IMPORTANT**: Re-run the SAME test from task 1.1 - do NOT write a new test
     - The test from task 1.1 encodes the expected behavior
@@ -132,15 +132,15 @@
     - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
     - _Requirements: Expected Behavior Properties from design - Property 1_
 
-  - [ ] 3.3 Verify Bug 1 preservation tests still pass
+  - [x] 3.3 Verify Bug 1 preservation tests still pass
     - **Property 2: Preservation** - Short Capture Sequences Preserved
     - **IMPORTANT**: Re-run the SAME test from task 2.1 - do NOT write a new test
     - Run short capture sequence tests from step 2.1
     - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
 
-- [ ] 4. Fix Bug 2: Rule Violation - Backward Captures
+- [x] 4. Fix Bug 2: Rule Violation - Backward Captures
 
-  - [ ] 4.1 Remove backward direction restrictions in can_capture_from
+  - [x] 4.1 Remove backward direction restrictions in can_capture_from
     - Delete line 2562: `if (is_black && (offset == -4 || offset == -6)) continue;  // 黑方不能向下吃`
     - Delete line 2563: `if (!is_black && (offset == 6 || offset == 4)) continue;   // 白方不能向上吃`
     - Keep the direction loop checking all 4 directions for all pieces
@@ -149,23 +149,23 @@
     - _Preservation: Forward captures for normal pieces and all king captures continue to work exactly as before_
     - _Requirements: 2.3, 2.4, 3.4, 3.5_
 
-  - [ ] 4.2 Verify Bug 2 exploration test now passes
+  - [x] 4.2 Verify Bug 2 exploration test now passes
     - **Property 1: Expected Behavior** - Backward Captures Enabled
     - **IMPORTANT**: Re-run the SAME test from task 1.2 - do NOT write a new test
     - Run backward capture test from step 1.2
     - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
     - _Requirements: Expected Behavior Properties from design - Property 2_
 
-  - [ ] 4.3 Verify Bug 2 preservation tests still pass
+  - [x] 4.3 Verify Bug 2 preservation tests still pass
     - **Property 2: Preservation** - Forward Captures and King Moves Preserved
     - **IMPORTANT**: Re-run the SAME tests from tasks 2.2 and 2.3 - do NOT write new tests
     - Run forward capture tests from step 2.2
     - Run king movement tests from step 2.3
     - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
 
-- [ ] 5. Fix Bug 3: Rule Violation - Landing on Captured Pieces
+- [x] 5. Fix Bug 3: Rule Violation - Landing on Captured Pieces
 
-  - [ ] 5.1 Fix empty square calculation in generate_man_captures
+  - [x] 5.1 Fix empty square calculation in generate_man_captures
     - Change line 2617: `uint64_t empty = board.get_empty_squares() | captured;` → `uint64_t empty = board.get_empty_squares();`
     - Remove the `| captured` operation that incorrectly treats captured pieces as empty
     - Keep the captured bitboard for checking if a piece was already captured in the sequence
@@ -174,22 +174,22 @@
     - _Preservation: Single-jump captures and valid multi-jumps where all landing squares are empty continue to work exactly as before_
     - _Requirements: 2.5, 2.6, 3.6, 3.7_
 
-  - [ ] 5.2 Verify Bug 3 exploration test now passes
+  - [x] 5.2 Verify Bug 3 exploration test now passes
     - **Property 1: Expected Behavior** - Landing Square Validation
     - **IMPORTANT**: Re-run the SAME test from task 1.3 - do NOT write a new test
     - Run landing on captured square test from step 1.3
     - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
     - _Requirements: Expected Behavior Properties from design - Property 3_
 
-  - [ ] 5.3 Verify Bug 3 preservation tests still pass
+  - [x] 5.3 Verify Bug 3 preservation tests still pass
     - **Property 2: Preservation** - Valid Multi-Jumps Preserved
     - **IMPORTANT**: Re-run the SAME test from task 2.4 - do NOT write a new test
     - Run valid multi-jump tests from step 2.4
     - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
 
-- [ ] 6. Fix Bug 4: Rule Discrepancy - Draw Rule
+- [x] 6. Fix Bug 4: Rule Discrepancy - Draw Rule
 
-  - [ ] 6.1 Update draw threshold from 100 to 80 half-moves
+  - [x] 6.1 Update draw threshold from 100 to 80 half-moves
     - Change line 2296 (actually line 1749 based on grep): `if (halfmove_clock >= 100) {  // 双方各50步` → `if (halfmove_clock >= 80) {  // 双方各40步`
     - Update comment to reflect correct 40-move rule
     - _Bug_Condition: isBugCondition_DrawRule(gameState) where gameState.halfmove_clock >= 80 AND gameState.halfmove_clock < 100_
@@ -197,14 +197,14 @@
     - _Preservation: Three-fold repetition draw detection and halfmove_clock management continue to work exactly as before_
     - _Requirements: 2.7, 2.8, 3.8, 3.9, 3.10, 3.11, 3.12_
 
-  - [ ] 6.2 Verify Bug 4 exploration test now passes
+  - [x] 6.2 Verify Bug 4 exploration test now passes
     - **Property 1: Expected Behavior** - Draw Rule Threshold
     - **IMPORTANT**: Re-run the SAME test from task 1.4 - do NOT write a new test
     - Run 40-move rule test from step 1.4
     - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
     - _Requirements: Expected Behavior Properties from design - Property 4_
 
-  - [ ] 6.3 Verify Bug 4 preservation tests still pass
+  - [x] 6.3 Verify Bug 4 preservation tests still pass
     - **Property 2: Preservation** - Repetition Draw and Clock Management Preserved
     - **IMPORTANT**: Re-run the SAME tests from tasks 2.5 and 2.6 - do NOT write new tests
     - Run three-fold repetition tests from step 2.5
@@ -213,7 +213,7 @@
 
 ## Phase 4: Final Validation
 
-- [ ] 7. Checkpoint - Ensure all tests pass
+- [x] 7. Checkpoint - Ensure all tests pass
   - Re-run all exploration tests (tasks 1.1-1.4) - all should PASS after fixes
   - Re-run all preservation tests (tasks 2.1-2.6) - all should still PASS
   - Verify no memory corruption with sanitizers if available

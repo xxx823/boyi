@@ -352,17 +352,24 @@ bool MoveGenerator::initialized = false;
 // ==========================================
 class Evaluator {
 public:
-    // 评估权重常量
+    // 游戏阶段枚举
+    enum GamePhase {
+        OPENING,   // 开局：前15步
+        MIDGAME,   // 中局：16-40步且棋子数>8
+        ENDGAME    // 残局：棋子数<=8
+    };
+    
+    // 评估权重常量（优化后的权重 - 更激进的战术风格）
     static constexpr int MAN_VALUE = 100;        // 普通棋子价值
-    static constexpr int KING_VALUE = 300;       // 王棋价值
-    static constexpr int CENTER_BONUS = 10;      // 中心控制奖励
-    static constexpr int MOBILITY_WEIGHT = 5;    // 机动性权重
-    static constexpr int SAFETY_BONUS = 10;      // 安全性奖励
-    static constexpr int EXPOSED_PENALTY = -15;  // 暴露惩罚
-    static constexpr int CONNECTED_BONUS = 8;    // 连续棋子奖励
-    static constexpr int ISOLATED_PENALTY = -12; // 孤立棋子惩罚
-    static constexpr int BACK_ROW_BONUS = 5;     // 后排奖励（防守）
-    static constexpr int PROMOTION_ROW_BONUS = 15; // 接近升王奖励
+    static constexpr int KING_VALUE = 350;       // 王棋价值（提升到3.5倍）
+    static constexpr int CENTER_BONUS = 15;      // 中心控制奖励（提升50%）
+    static constexpr int MOBILITY_WEIGHT = 8;    // 机动性权重（提升60%）
+    static constexpr int SAFETY_BONUS = 12;      // 安全性奖励（提升20%）
+    static constexpr int EXPOSED_PENALTY = -20;  // 暴露惩罚（加重33%）
+    static constexpr int CONNECTED_BONUS = 10;   // 连续棋子奖励（提升25%）
+    static constexpr int ISOLATED_PENALTY = -15; // 孤立棋子惩罚（加重25%）
+    static constexpr int BACK_ROW_BONUS = 8;     // 后排奖励（防守，提升60%）
+    static constexpr int PROMOTION_ROW_BONUS = 20; // 接近升王奖励（提升33%）
     
     // 位置价值表（预计算）
     static int position_value[50];
@@ -396,6 +403,9 @@ public:
     // 检查是否为终局
     static bool is_terminal(const Board& board, int& result);
     
+    // 获取游戏阶段
+    static GamePhase get_game_phase(const Board& board, int move_count);
+    
 private:
     // 评估材料优势
     static int evaluate_material(const Board& board);
@@ -422,8 +432,20 @@ public:
     // 高级评估：王的活跃度
     static int evaluate_king_activity(const Board& board);
     
+    // 高级评估：底线保护
+    static int evaluate_back_row(const Board& board);
+    
+    // 高级评估：边缘安全
+    static int evaluate_edge_safety(const Board& board);
+    
+    // 高级评估：中局战术
+    static int evaluate_midgame_tactics(const Board& board);
+    
+    // 高级评估：阵型评估（棋子连结性和包围）
+    static int evaluate_formation(const Board& board);
+    
     // 改进的主评估函数
-    static int evaluate_advanced(const Board& board);
+    static int evaluate_advanced(const Board& board, int move_count = 0);
 };
 
 // 静态成员初始化
@@ -658,6 +680,8 @@ int Evaluator::evaluate(const Board& board) {
     score += evaluate_mobility(board);
     score += evaluate_safety(board);
     score += evaluate_structure(board);
+    score += evaluate_back_row(board);      // 底线保护评估
+    score += evaluate_edge_safety(board);   // 边缘安全评估
     
     return score;
 }
@@ -688,6 +712,20 @@ bool Evaluator::is_terminal(const Board& board, int& result) {
     
     result = 0;
     return false;
+}
+
+// 获取游戏阶段
+Evaluator::GamePhase Evaluator::get_game_phase(const Board& board, int move_count) {
+    int total_pieces = __builtin_popcountll(board.get_all_black()) +
+                      __builtin_popcountll(board.get_all_white());
+    
+    if (total_pieces <= 8) {
+        return ENDGAME;
+    } else if (move_count <= 15) {
+        return OPENING;
+    } else {
+        return MIDGAME;
+    }
 }
 
 // 评估材料优势
@@ -990,13 +1028,375 @@ int Evaluator::evaluate_king_activity(const Board& board) {
     return score;
 }
 
+// 高级评估：底线保护
+int Evaluator::evaluate_back_row(const Board& board) {
+    bool is_black = (board.current_player == 1);
+    int score = 0;
+    
+    // 定义底线格子
+    // 黑方底线：第1行（格子0-4）
+    // 白方底线：第10行（格子45-49）
+    const int black_back_row[] = {0, 1, 2, 3, 4};
+    const int white_back_row[] = {45, 46, 47, 48, 49};
+    
+    uint64_t my_pieces = is_black ? board.get_all_black() : board.get_all_white();
+    uint64_t opp_men = is_black ? board.white_men : board.black_men;
+    
+    // 检查己方底线
+    const int* my_back_row = is_black ? black_back_row : white_back_row;
+    for (int i = 0; i < 5; ++i) {
+        int sq = my_back_row[i];
+        uint64_t mask = 1ULL << sq;
+        
+        if (my_pieces & mask) {
+            // 底线有己方棋子：增加8分保护奖励
+            score += 8;
+        } else {
+            // 底线为空：检查对手是否有升王威胁
+            bool has_promotion_threat = false;
+            
+            // 检查对手兵是否接近升王（距离2步内）
+            uint64_t opp_men_copy = opp_men;
+            while (opp_men_copy) {
+                int opp_sq = __builtin_ctzll(opp_men_copy);
+                opp_men_copy &= opp_men_copy - 1;
+                
+                int row = opp_sq / 5;
+                int distance_to_promotion;
+                
+                if (!is_black) {
+                    distance_to_promotion = 9 - row;  // 对手是黑方，向上升王
+                } else {
+                    distance_to_promotion = row;  // 对手是白方，向下升王
+                }
+                
+                if (distance_to_promotion <= 2) {
+                    has_promotion_threat = true;
+                    break;
+                }
+            }
+            
+            // 底线为空且对手有升王威胁：减少15分暴露惩罚
+            if (has_promotion_threat) {
+                score -= 15;
+            }
+        }
+    }
+    
+    return score;
+}
+
+// 高级评估：边缘安全
+int Evaluator::evaluate_edge_safety(const Board& board) {
+    bool is_black = (board.current_player == 1);
+    uint64_t my_pieces = is_black ? board.get_all_black() : board.get_all_white();
+    uint64_t opp_pieces = is_black ? board.get_all_white() : board.get_all_black();
+    
+    int score = 0;
+    
+    // 检查每个己方棋子
+    uint64_t pieces_copy = my_pieces;
+    while (pieces_copy) {
+        int sq = __builtin_ctzll(pieces_copy);
+        pieces_copy &= pieces_copy - 1;
+        
+        // 检查是否在边缘（列0或列9）
+        int row = sq / 5;
+        int col = (sq % 5) * 2 + (row % 2);
+        
+        if (col == 0 || col == 9) {
+            // 这是边缘格子，检查相邻格子
+            bool has_friendly_neighbor = false;
+            bool has_enemy_neighbor = false;
+            
+            // 检查4个对角方向的相邻格子
+            for (int dir = 0; dir < 4; ++dir) {
+                int offset = MoveGenerator::DIRECTIONS[dir];
+                int adj = sq + offset;
+                
+                if (MoveGenerator::is_valid_square(adj)) {
+                    uint64_t adj_mask = 1ULL << adj;
+                    if (my_pieces & adj_mask) {
+                        has_friendly_neighbor = true;
+                    }
+                    if (opp_pieces & adj_mask) {
+                        has_enemy_neighbor = true;
+                    }
+                }
+            }
+            
+            // 边缘有己方棋子且相邻格子有己方棋子：增加6分安全奖励
+            if (has_friendly_neighbor) {
+                score += 6;
+            }
+            
+            // 边缘有己方棋子且相邻格子有对手棋子：减少10分威胁惩罚
+            if (has_enemy_neighbor) {
+                score -= 10;
+            }
+        }
+    }
+    
+    return score;
+}
+
+// 高级评估：中局战术
+int Evaluator::evaluate_midgame_tactics(const Board& board) {
+    bool is_black = (board.current_player == 1);
+    uint64_t my_kings = is_black ? board.black_kings : board.white_kings;
+    uint64_t my_men = is_black ? board.black_men : board.white_men;
+    uint64_t opp_men = is_black ? board.white_men : board.black_men;
+    uint64_t opp_pieces = is_black ? board.get_all_white() : board.get_all_black();
+    uint64_t my_pieces = is_black ? board.get_all_black() : board.get_all_white();
+    
+    int score = 0;
+    
+    // 1. 双王配合（两个王在相邻对角线）
+    if (__builtin_popcountll(my_kings) >= 2) {
+        uint64_t kings_copy = my_kings;
+        while (kings_copy) {
+            int sq1 = __builtin_ctzll(kings_copy);
+            kings_copy &= kings_copy - 1;
+            
+            uint64_t remaining = kings_copy;
+            while (remaining) {
+                int sq2 = __builtin_ctzll(remaining);
+                remaining &= remaining - 1;
+                
+                // 检查是否在相邻对角线（距离为4或6）
+                int distance = abs(sq1 - sq2);
+                if (distance == 4 || distance == 6) {
+                    score += 30;  // 双王配合奖励
+                }
+            }
+        }
+    }
+    
+    // 2. 包围对手棋子（形成夹击）
+    uint64_t opp_copy = opp_pieces;
+    while (opp_copy) {
+        int opp_sq = __builtin_ctzll(opp_copy);
+        opp_copy &= opp_copy - 1;
+        
+        int adjacent_count = 0;
+        for (int dir = 0; dir < 4; ++dir) {
+            int offset = MoveGenerator::DIRECTIONS[dir];
+            int adj = opp_sq + offset;
+            
+            if (MoveGenerator::is_valid_square(adj)) {
+                uint64_t adj_mask = 1ULL << adj;
+                if (my_pieces & adj_mask) {
+                    adjacent_count++;
+                }
+            }
+        }
+        
+        // 如果对手棋子被3个或4个己方棋子包围
+        if (adjacent_count >= 3) {
+            score += 20;  // 包围奖励
+        }
+    }
+    
+    // 3. 控制对手升王路线
+    uint64_t opp_men_copy = opp_men;
+    while (opp_men_copy) {
+        int opp_sq = __builtin_ctzll(opp_men_copy);
+        opp_men_copy &= opp_men_copy - 1;
+        
+        int row = opp_sq / 5;
+        int distance_to_promotion;
+        
+        if (!is_black) {
+            distance_to_promotion = 9 - row;  // 对手是黑方
+        } else {
+            distance_to_promotion = row;  // 对手是白方
+        }
+        
+        // 如果对手接近升王（2步内）
+        if (distance_to_promotion <= 2) {
+            // 检查我方是否控制升王路线
+            bool blocking = false;
+            for (int dir = 0; dir < 2; ++dir) {  // 只检查前进方向
+                int offset = !is_black ? MoveGenerator::DIRECTIONS[dir] : MoveGenerator::DIRECTIONS[dir + 2];
+                int target = opp_sq + offset;
+                
+                if (MoveGenerator::is_valid_square(target)) {
+                    uint64_t target_mask = 1ULL << target;
+                    if (my_pieces & target_mask) {
+                        blocking = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (blocking) {
+                score += 15;  // 控制升王路线奖励
+            }
+        }
+    }
+    
+    // 4. 检测对角线兵链（3个或更多己方兵形成对角线链）
+    // 兵链定义：兵在对角线上连续排列，形成防御或进攻阵型
+    int pawn_chain_count = 0;
+    uint64_t men_copy = my_men;
+    std::vector<int> men_positions;
+    
+    // 收集所有兵的位置
+    while (men_copy) {
+        int sq = __builtin_ctzll(men_copy);
+        men_copy &= men_copy - 1;
+        men_positions.push_back(sq);
+    }
+    
+    // 检测对角线兵链
+    // 对角线方向：左上(-6), 右上(-4), 左下(+4), 右下(+6)
+    const int diagonal_offsets[] = {-6, -4, 4, 6};
+    
+    for (int start_sq : men_positions) {
+        for (int offset : diagonal_offsets) {
+            int chain_length = 1;
+            int current_sq = start_sq;
+            
+            // 沿着对角线方向检查连续的兵
+            while (true) {
+                int next_sq = current_sq + offset;
+                
+                // 检查下一个格子是否有效且有己方兵
+                if (next_sq < 0 || next_sq >= 50) break;
+                
+                uint64_t next_mask = 1ULL << next_sq;
+                if (!(my_men & next_mask)) break;
+                
+                // 检查是否在同一对角线上（行列关系正确）
+                int curr_row = current_sq / 5;
+                int next_row = next_sq / 5;
+                int row_diff = abs(next_row - curr_row);
+                
+                // 对角线移动应该是行差1
+                if (row_diff != 1) break;
+                
+                chain_length++;
+                current_sq = next_sq;
+            }
+            
+            // 如果形成3个或更多兵的链，计数
+            if (chain_length >= 3) {
+                pawn_chain_count++;
+                break;  // 每个起始兵只计数一次
+            }
+        }
+    }
+    
+    // 兵链奖励（每条链+25分）
+    if (pawn_chain_count > 0) {
+        score += pawn_chain_count * 25;
+    }
+    
+    // 5. 形成连续攻击态势（多个棋子向前推进）
+    // 这是对兵链的补充评估，评估整体进攻态势
+    int advanced_count = 0;
+    men_copy = my_men;
+    
+    while (men_copy) {
+        int sq = __builtin_ctzll(men_copy);
+        men_copy &= men_copy - 1;
+        
+        int row = sq / 5;
+        
+        // 检查是否在前进位置（黑方：行>=5，白方：行<=4）
+        if ((is_black && row >= 5) || (!is_black && row <= 4)) {
+            advanced_count++;
+        }
+    }
+    
+    // 如果有3个或更多棋子在前进位置
+    if (advanced_count >= 3) {
+        score += 25;  // 连续攻击态势奖励
+    }
+    
+    return score;
+}
+
+// 高级评估：阵型评估（棋子连结性和包围）
+// 需求: 6.1, 6.2, 6.3, 6.6
+int Evaluator::evaluate_formation(const Board& board) {
+    bool is_black = (board.current_player == 1);
+    uint64_t my_pieces = is_black ? board.get_all_black() : board.get_all_white();
+    uint64_t opp_pieces = is_black ? board.get_all_white() : board.get_all_black();
+    
+    int score = 0;
+    
+    // 1. 棋子连结性评估（需求 6.1, 6.2, 6.3）
+    // 检查每个己方棋子的4个对角相邻格子
+    uint64_t pieces_copy = my_pieces;
+    while (pieces_copy) {
+        int sq = __builtin_ctzll(pieces_copy);
+        pieces_copy &= pieces_copy - 1;
+        
+        int adjacent_friendly_count = 0;
+        
+        // 检查4个对角方向的相邻格子
+        for (int dir = 0; dir < 4; ++dir) {
+            int offset = MoveGenerator::DIRECTIONS[dir];
+            int adj = sq + offset;
+            
+            if (MoveGenerator::is_valid_square(adj)) {
+                uint64_t adj_mask = 1ULL << adj;
+                if (my_pieces & adj_mask) {
+                    adjacent_friendly_count++;
+                }
+            }
+        }
+        
+        // >= 2个对角相邻己方棋子：增加10分连结奖励（需求 6.2）
+        if (adjacent_friendly_count >= 2) {
+            score += 10;
+        }
+        // 0个对角相邻己方棋子：减少15分孤立惩罚（需求 6.3）
+        else if (adjacent_friendly_count == 0) {
+            score -= 15;
+        }
+    }
+    
+    // 2. 包围评估（需求 6.6）
+    // 检测对手棋子是否被包围（4个方向中 >= 3个有己方棋子）
+    uint64_t opp_copy = opp_pieces;
+    while (opp_copy) {
+        int opp_sq = __builtin_ctzll(opp_copy);
+        opp_copy &= opp_copy - 1;
+        
+        int adjacent_count = 0;
+        for (int dir = 0; dir < 4; ++dir) {
+            int offset = MoveGenerator::DIRECTIONS[dir];
+            int adj = opp_sq + offset;
+            
+            if (MoveGenerator::is_valid_square(adj)) {
+                uint64_t adj_mask = 1ULL << adj;
+                if (my_pieces & adj_mask) {
+                    adjacent_count++;
+                }
+            }
+        }
+        
+        // 包围成功（>= 3个方向有己方棋子）：增加20分包围奖励
+        if (adjacent_count >= 3) {
+            score += 20;
+        }
+    }
+    
+    return score;
+}
+
 // 改进的主评估函数
-int Evaluator::evaluate_advanced(const Board& board) {
+int Evaluator::evaluate_advanced(const Board& board, int move_count) {
     // 检查终局
     int terminal_result;
     if (is_terminal(board, terminal_result)) {
         return terminal_result;
     }
+    
+    // 获取游戏阶段
+    GamePhase phase = get_game_phase(board, move_count);
     
     // 综合评估（包含高级评估）
     int score = 0;
@@ -1005,9 +1405,23 @@ int Evaluator::evaluate_advanced(const Board& board) {
     score += evaluate_mobility(board);
     score += evaluate_safety(board);
     score += evaluate_structure(board);
-    score += evaluate_key_squares(board);
-    score += evaluate_promotion_threat(board);
-    score += evaluate_king_activity(board);
+    score += evaluate_back_row(board);      // 底线保护评估
+    score += evaluate_edge_safety(board);   // 边缘安全评估
+    score += evaluate_formation(board);     // 阵型评估（需求 6.1-6.6）
+    
+    // 根据游戏阶段调整高级评估的权重
+    if (phase == MIDGAME) {
+        // 中局阶段：增加王活跃度和中心控制的权重
+        score += (int)(evaluate_key_squares(board) * 1.67);
+        score += evaluate_promotion_threat(board);
+        score += (int)(evaluate_king_activity(board) * 1.75);
+        score += evaluate_midgame_tactics(board);
+    } else {
+        // 开局和残局：使用标准权重
+        score += evaluate_key_squares(board);
+        score += evaluate_promotion_threat(board);
+        score += evaluate_king_activity(board);
+    }
     
     return score;
 }
@@ -1232,12 +1646,18 @@ private:
     int time_limit_ms;
     bool time_up;
     
+    // 重复局面检测：搜索路径上的哈希历史栈
+    std::vector<uint64_t> search_path_hashes;
+    
+    // 当前游戏的走法计数（用于游戏阶段检测）
+    int current_move_count;
+    
     // 常量
     static constexpr int INF = 1000000;
     static constexpr int MATE_SCORE = 100000;
     
 public:
-    SearchEngine(size_t tt_size_mb = 256) : tt(tt_size_mb), max_depth(64) {
+    SearchEngine(size_t tt_size_mb = 256) : tt(tt_size_mb), max_depth(64), current_move_count(0) {
         clear_tables();
     }
     
@@ -1250,6 +1670,12 @@ public:
         return iterative_deepening(board, time_limit_ms);
     }
     
+    // 主搜索接口（带走法计数）
+    Move search(Board& board, int time_limit_ms, int move_count) {
+        this->current_move_count = move_count;
+        return search(board, time_limit_ms);
+    }
+    
     // 配置
     void set_max_depth(int depth) { max_depth = depth; }
     void clear_tables() {
@@ -1258,6 +1684,7 @@ public:
         killers.clear();
         nodes_searched = 0;
         completed_depth = 0;
+        search_path_hashes.clear();
     }
     
     // 统计信息
@@ -1301,16 +1728,16 @@ private:
                 int alpha = best_score - ASPIRATION_WINDOW;
                 int beta = best_score + ASPIRATION_WINDOW;
                 
-                score = alpha_beta(board, depth, alpha, beta, true);
+                score = alpha_beta(board, depth, alpha, beta, true, true);
                 
                 // 如果搜索失败（超出窗口），重新搜索
                 if (score <= alpha || score >= beta) {
                     // 扩大窗口重新搜索
-                    score = alpha_beta(board, depth, -INF, INF, true);
+                    score = alpha_beta(board, depth, -INF, INF, true, true);
                 }
             } else {
                 // 前几层使用完整窗口
-                score = alpha_beta(board, depth, -INF, INF, true);
+                score = alpha_beta(board, depth, -INF, INF, true, true);
             }
             
             if (time_up) {
@@ -1341,7 +1768,7 @@ private:
     }
     
     // Alpha-Beta搜索（带主变量搜索优化）
-    int alpha_beta(Board& board, int depth, int alpha, int beta, bool maximizing) {
+    int alpha_beta(Board& board, int depth, int alpha, int beta, bool maximizing, bool null_move_allowed = true) {
         // 检查超时
         if (nodes_searched % 1024 == 0 && check_time()) {
             time_up = true;
@@ -1359,11 +1786,61 @@ private:
         // 终止条件：深度为0或终局
         int terminal_result;
         if (depth == 0) {
-            return quiescence_search(board, alpha, beta);
+            return quiescence_search(board, alpha, beta, 0);  // 从深度0开始静态搜索
         }
         
         if (Evaluator::is_terminal(board, terminal_result)) {
             return terminal_result * MATE_SCORE;
+        }
+        
+        // 空步裁剪 (Null Move Pruning)
+        // 条件：深度 >= 3，允许空步，不在静态搜索中
+        if (depth >= 3 && null_move_allowed) {
+            // 检查是否处于Zugzwang状态（只有王棋且王棋数 <= 3）
+            bool is_black = (board.current_player == 1);
+            uint64_t my_men = is_black ? board.black_men : board.white_men;
+            uint64_t my_kings = is_black ? board.black_kings : board.white_kings;
+            int king_count = __builtin_popcountll(my_kings);
+            bool only_kings = (my_men == 0);
+            bool is_zugzwang = (only_kings && king_count <= 3);
+            
+            // 检查是否为残局（总棋子数 <= 6）
+            int total_pieces = __builtin_popcountll(board.get_all_black()) + 
+                             __builtin_popcountll(board.get_all_white());
+            bool is_endgame = (total_pieces <= 6);
+            
+            // 如果不在Zugzwang状态且不在残局，尝试空步裁剪
+            if (!is_zugzwang && !is_endgame) {
+                // 保存当前状态
+                Board prev_state = board;
+                
+                // 执行空步：只切换玩家，不移动棋子
+                board.current_player = -board.current_player;
+                board.hash ^= ZobristHash::get_side_hash();
+                
+                // 以reduced_depth = depth - 3搜索
+                int reduced_depth = depth - 3;
+                
+                // 根据当前是maximizing还是minimizing，调整搜索窗口
+                int null_score;
+                if (maximizing) {
+                    // maximizing节点：尝试证明 >= beta
+                    null_score = alpha_beta(board, reduced_depth, alpha, beta, false, false);
+                } else {
+                    // minimizing节点：尝试证明 <= alpha
+                    null_score = alpha_beta(board, reduced_depth, alpha, beta, true, false);
+                }
+                
+                // 恢复状态
+                board.unmake_move(Move(), prev_state);
+                
+                // 如果空步搜索结果导致剪枝，返回相应值
+                if (maximizing && null_score >= beta) {
+                    return beta;  // 空步剪枝成功（maximizing）
+                } else if (!maximizing && null_score <= alpha) {
+                    return alpha;  // 空步剪枝成功（minimizing）
+                }
+            }
         }
         
         // 生成并排序走法
@@ -1398,15 +1875,15 @@ private:
                 // 主变量搜索（PVS）优化
                 if (first_move) {
                     // 第一个走法使用完整窗口
-                    eval = alpha_beta(board, depth - 1, alpha, beta, false);
+                    eval = alpha_beta(board, depth - 1, alpha, beta, false, true);
                     first_move = false;
                 } else {
                     // 后续走法先用空窗搜索
-                    eval = alpha_beta(board, depth - 1, alpha, alpha + 1, false);
+                    eval = alpha_beta(board, depth - 1, alpha, alpha + 1, false, true);
                     
                     // 如果空窗搜索失败，重新搜索
                     if (eval > alpha && eval < beta) {
-                        eval = alpha_beta(board, depth - 1, alpha, beta, false);
+                        eval = alpha_beta(board, depth - 1, alpha, beta, false, true);
                     }
                 }
                 
@@ -1459,15 +1936,15 @@ private:
                 
                 // 主变量搜索（PVS）优化
                 if (first_move) {
-                    eval = alpha_beta(board, depth - 1, alpha, beta, true);
+                    eval = alpha_beta(board, depth - 1, alpha, beta, true, true);
                     first_move = false;
                 } else {
                     // 空窗搜索
-                    eval = alpha_beta(board, depth - 1, beta - 1, beta, true);
+                    eval = alpha_beta(board, depth - 1, beta - 1, beta, true, true);
                     
                     // 重新搜索
                     if (eval > alpha && eval < beta) {
-                        eval = alpha_beta(board, depth - 1, alpha, beta, true);
+                        eval = alpha_beta(board, depth - 1, alpha, beta, true, true);
                     }
                 }
                 
@@ -1507,16 +1984,37 @@ private:
     }
     
     // 静止搜索（避免水平线效应）
-    int quiescence_search(Board& board, int alpha, int beta) {
+    int quiescence_search(Board& board, int alpha, int beta, int qs_depth = 0) {
         nodes_searched++;
         
-        // 站立评估（使用改进的评估函数）
+        // 递归深度限制：最大10层
+        const int MAX_QS_DEPTH = 10;
+        if (qs_depth >= MAX_QS_DEPTH) {
+            return Evaluator::evaluate_advanced(board);
+        }
+        
+        // 重复局面检测：返回和棋分数0
+        // 检查当前哈希值是否在搜索路径上出现过
+        uint64_t current_hash = board.hash;
+        for (size_t i = 0; i < search_path_hashes.size(); ++i) {
+            if (search_path_hashes[i] == current_hash) {
+                // 检测到重复局面，返回和棋分数0
+                return 0;
+            }
+        }
+        
+        // 站立评估（使用改进的评估函数）作为下界
         int stand_pat = Evaluator::evaluate_advanced(board);
         
+        // Beta剪枝：如果站立评估已经 >= beta，立即返回beta
         if (stand_pat >= beta) {
             return beta;
         }
         
+        // Delta剪枝优化：如果站立评估加上最大可能增益仍然 <= alpha，可以剪枝
+        // 这里暂不实现，因为需求中未明确要求
+        
+        // 更新alpha
         if (alpha < stand_pat) {
             alpha = stand_pat;
         }
@@ -1538,19 +2036,76 @@ private:
             return stand_pat;
         }
         
+        // MVV-LVA排序：Most Valuable Victim - Least Valuable Attacker
+        // 吃王优先级高于吃兵，使用较小价值的棋子吃较大价值的棋子优先
+        for (Move& move : capture_moves) {
+            int mvv_lva_score = 0;
+            
+            // 确定攻击者类型（from位置的棋子）
+            uint64_t from_mask = 1ULL << move.from;
+            bool attacker_is_king = false;
+            
+            if (board.current_player == 1) {
+                // 黑方攻击
+                attacker_is_king = (board.black_kings & from_mask) != 0;
+            } else {
+                // 白方攻击
+                attacker_is_king = (board.white_kings & from_mask) != 0;
+            }
+            
+            // 计算被吃棋子的总价值（Victim价值）
+            int victim_value = 0;
+            uint64_t opponent_kings = (board.current_player == 1) ? board.white_kings : board.black_kings;
+            
+            for (int i = 0; i < move.num_captures; ++i) {
+                if (move.captures[i] >= 0 && move.captures[i] < 50) {
+                    uint64_t capture_mask = 1ULL << move.captures[i];
+                    if (opponent_kings & capture_mask) {
+                        victim_value += 300;  // 吃王价值高
+                    } else {
+                        victim_value += 100;  // 吃兵价值低
+                    }
+                }
+            }
+            
+            // 计算攻击者价值（Attacker价值，用于减分）
+            int attacker_value = attacker_is_king ? 300 : 100;
+            
+            // MVV-LVA分数 = 被吃棋子价值 * 10 - 攻击者价值
+            // 乘以10是为了让victim价值占主导地位
+            mvv_lva_score = victim_value * 10 - attacker_value;
+            
+            move.score = mvv_lva_score;
+        }
+        
+        // 按MVV-LVA分数降序排序
+        std::sort(capture_moves.begin(), capture_moves.end(), [](const Move& a, const Move& b) {
+            return a.score > b.score;
+        });
+        
         // 搜索吃子走法
         for (const Move& move : capture_moves) {
             Board prev_state = board;
+            
+            // 将当前哈希值压入栈
+            search_path_hashes.push_back(current_hash);
+            
             board.make_move(move);
             
-            int score = -quiescence_search(board, -beta, -alpha);
+            // 递归调用，深度+1
+            int score = -quiescence_search(board, -beta, -alpha, qs_depth + 1);
             
             board.unmake_move(move, prev_state);
             
+            // 从栈中弹出哈希值
+            search_path_hashes.pop_back();
+            
+            // Beta剪枝
             if (score >= beta) {
                 return beta;
             }
             
+            // 更新alpha
             if (score > alpha) {
                 alpha = score;
             }
@@ -1563,7 +2118,7 @@ private:
     void sort_moves(MoveList& moves, const Board& board, int depth) {
         // 为每个走法计算分数
         for (Move& move : moves) {
-            move.score = score_move(move, board, depth);
+            move.score = score_move(move, board, depth, current_move_count);
         }
         
         // 按分数降序排序
@@ -1573,46 +2128,164 @@ private:
     }
     
     // 计算走法分数（用于排序）
-    int score_move(const Move& move, const Board& board, int depth) {
+    // 优先级顺序：置换表最佳着法(10000) > 强制吃子(1000+MVV-LVA) > 产生王棋(900) > 杀手走法(500) > 历史启发(0-100) > 安静走法(位置启发)
+    int score_move(const Move& move, const Board& board, int depth, int move_count = 0) {
         int score = 0;
         
-        // 1. 置换表走法（最高优先级）
+        // 1. 置换表走法（最高优先级：10000分）
         Move tt_move = tt.get_best_move(board.hash);
         if (tt_move.is_valid() && tt_move.from == move.from && tt_move.to == move.to) {
             return 10000;
         }
         
-        // 2. 吃子走法（MVV-LVA: Most Valuable Victim - Least Valuable Attacker）
+        // 2. 吃子走法（1000 + MVV-LVA分数）
+        // MVV-LVA: Most Valuable Victim - Least Valuable Attacker
         if (move.num_captures > 0) {
-            score = 1000 + move.num_captures * 100;
-            
-            // 检查被吃的棋子类型
+            // 确定攻击者类型（from位置的棋子）
             bool is_black = (board.current_player == 1);
+            uint64_t from_mask = 1ULL << move.from;
+            bool attacker_is_king = false;
+            
+            if (is_black) {
+                attacker_is_king = (board.black_kings & from_mask) != 0;
+            } else {
+                attacker_is_king = (board.white_kings & from_mask) != 0;
+            }
+            
+            // 计算被吃棋子的总价值（Victim价值）
+            int victim_value = 0;
             uint64_t opponent_kings = is_black ? board.white_kings : board.black_kings;
             
             for (int i = 0; i < move.num_captures; ++i) {
                 if (move.captures[i] >= 0 && move.captures[i] < 50) {
                     uint64_t capture_mask = 1ULL << move.captures[i];
                     if (opponent_kings & capture_mask) {
-                        score += 200;  // 吃王更有价值
+                        victim_value += 300;  // 吃王价值高
+                    } else {
+                        victim_value += 100;  // 吃兵价值低
                     }
                 }
             }
             
-            return score;
+            // 计算攻击者价值（Attacker价值，用于减分）
+            int attacker_value = attacker_is_king ? 300 : 100;
+            
+            // MVV-LVA分数 = 被吃棋子价值 * 10 - 攻击者价值
+            // 乘以10是为了让victim价值占主导地位
+            int mvv_lva_score = victim_value * 10 - attacker_value;
+            
+            return 1000 + mvv_lva_score;
         }
         
-        // 3. 杀手走法
+        // 3. 产生王棋的走法（900分）
+        bool is_black = (board.current_player == 1);
+        uint64_t from_mask = 1ULL << move.from;
+        
+        // 检查是否为普通兵（非王棋）
+        bool is_man = false;
+        if (is_black) {
+            is_man = (board.black_men & from_mask) != 0;
+        } else {
+            is_man = (board.white_men & from_mask) != 0;
+        }
+        
+        // 检查是否到达升王线
+        if (is_man) {
+            if (is_black && move.to >= 45 && move.to <= 49) {
+                // 黑方到达第10行（46-50号格子，索引45-49）
+                return 900;
+            } else if (!is_black && move.to >= 0 && move.to <= 4) {
+                // 白方到达第1行（1-5号格子，索引0-4）
+                return 900;
+            }
+        }
+        
+        // 4. 杀手走法（500分）
+        // 检查当前深度的两个杀手走法
         if (killers.is_killer(move, depth)) {
             return 500;
         }
         
-        // 4. 历史启发
+        // 5. 历史启发（0-100分）
+        // 使用HistoryTable.get(from, to)分数
         score += history.get(move.from, move.to);
         
-        // 5. 位置启发（向前移动更好）
+        // 6. 安静走法：位置启发分数
+        // 向前移动和占据中心位置更好
         if (move.from >= 0 && move.from < 50 && move.to >= 0 && move.to < 50) {
             score += Evaluator::position_value[move.to] - Evaluator::position_value[move.from];
+        }
+        
+        // 7. 中局着法排序增强（需求2.7）
+        // 检测游戏阶段，在中局阶段额外奖励战术走法
+        Evaluator::GamePhase phase = Evaluator::get_game_phase(board, move_count);
+        if (phase == Evaluator::MIDGAME) {
+            // 7a. 中心控制走法奖励（格子21,22,26,27）
+            // 这些是棋盘中心的关键格子
+            const int center_squares[] = {21, 22, 26, 27};
+            for (int center_sq : center_squares) {
+                if (move.to == center_sq) {
+                    score += 50;  // 中局占据中心格子额外奖励
+                    break;
+                }
+            }
+            
+            // 7b. 王的活跃度走法奖励
+            // 检查是否为王棋移动
+            bool is_king_move = false;
+            if (is_black) {
+                is_king_move = (board.black_kings & from_mask) != 0;
+            } else {
+                is_king_move = (board.white_kings & from_mask) != 0;
+            }
+            
+            if (is_king_move) {
+                // 计算王向中心移动的距离变化
+                int from_row = move.from / 5;
+                int from_col = (move.from % 5) * 2 + (from_row % 2);
+                int to_row = move.to / 5;
+                int to_col = (move.to % 5) * 2 + (to_row % 2);
+                
+                // 计算到中心的曼哈顿距离
+                int from_center_dist = abs(from_row - 4) + abs(from_col - 4);
+                int to_center_dist = abs(to_row - 4) + abs(to_col - 4);
+                
+                // 如果王向中心移动，给予额外奖励
+                if (to_center_dist < from_center_dist) {
+                    score += 30;  // 中局王向中心移动额外奖励
+                }
+            }
+        }
+            if (move.to == 21 || move.to == 22 || move.to == 26 || move.to == 27) {
+                score += 50;  // 中心控制奖励
+            }
+            
+            // 7b. 王的活跃度奖励
+            // 检查移动的棋子是否为王
+            bool is_king = false;
+            if (is_black) {
+                is_king = (board.black_kings & from_mask) != 0;
+            } else {
+                is_king = (board.white_kings & from_mask) != 0;
+            }
+            
+            // 如果是王棋向中心移动，给予额外奖励
+            if (is_king) {
+                // 计算from和to到中心的距离
+                int from_row = move.from / 5;
+                int from_col = (move.from % 5) * 2 + (from_row % 2);
+                int to_row = move.to / 5;
+                int to_col = (move.to % 5) * 2 + (to_row % 2);
+                
+                // 计算到中心(4,4)的曼哈顿距离
+                int from_center_dist = abs(from_row - 4) + abs(from_col - 4);
+                int to_center_dist = abs(to_row - 4) + abs(to_col - 4);
+                
+                // 如果王向中心移动（距离减少），给予奖励
+                if (to_center_dist < from_center_dist) {
+                    score += 30;  // 王活跃度奖励
+                }
+            }
         }
         
         return score;
@@ -1956,8 +2629,12 @@ private:
             // 开局阶段：使用较少时间（0.8倍）
             // 开局通常有开局库或标准走法
             return 0.8;
+        } else if (move_number >= 25 && move_number <= 35) {
+            // 中局关键阶段：使用更多时间（1.3倍）
+            // 这是AI容易陷入劣势的关键阶段，需要更深的搜索
+            return 1.3;
         } else if (move_number <= 40) {
-            // 中局阶段：使用正常时间（1.0倍）
+            // 中局其他阶段：使用正常时间（1.0倍）
             // 中局是最复杂的阶段，需要充分思考
             return 1.0;
         } else {
@@ -1972,14 +2649,41 @@ private:
 // 10. 开局库 (Opening Book)
 // ==========================================
 
+// ==========================================
+// 10. 开局库 (Opening Book)
+// ==========================================
+
+// 开局库条目结构
+struct BookEntry {
+    Move move;           // 开局走法
+    int weight;          // 走法权重（用于加权随机选择）
+    int frequency;       // 出现频率（统计用）
+    int win_count;       // 胜利次数（学习用）
+    int total_count;     // 总对局数（学习用）
+    
+    BookEntry() : weight(1), frequency(0), win_count(0), total_count(0) {}
+    
+    BookEntry(const Move& m, int w = 1) 
+        : move(m), weight(w), frequency(0), win_count(0), total_count(0) {}
+    
+    // 计算胜率
+    double win_rate() const {
+        return total_count > 0 ? (double)win_count / total_count : 0.5;
+    }
+};
+
 class OpeningBook {
 private:
     // 开局库条目：哈希值 -> 走法列表
-    std::unordered_map<uint64_t, std::vector<Move>> book;
+    std::unordered_map<uint64_t, std::vector<BookEntry>> book;
     bool loaded;
     
+    // 统计信息
+    uint64_t queries;
+    uint64_t hits;
+    
 public:
-    OpeningBook() : loaded(false) {
+    OpeningBook() : loaded(false), queries(0), hits(0) {
         // 初始化内置开局库
         init_builtin_openings();
     }
@@ -1991,69 +2695,101 @@ public:
         
         // 添加一些标准开局走法
         // 这里添加最常见的开局走法
-        std::vector<Move> opening_moves;
+        std::vector<BookEntry> opening_moves;
         
         // 黑方常见开局走法（向前推进中心兵）
-        opening_moves.push_back(Move(5, 10));   // 6-11
-        opening_moves.push_back(Move(6, 11));   // 7-12
-        opening_moves.push_back(Move(7, 12));   // 8-13
-        opening_moves.push_back(Move(8, 13));   // 9-14
-        opening_moves.push_back(Move(10, 15));  // 11-16
-        opening_moves.push_back(Move(11, 16));  // 12-17
+        opening_moves.push_back(BookEntry(Move(5, 10), 80));   // 6-11 (权重80)
+        opening_moves.push_back(BookEntry(Move(6, 11), 100));  // 7-12 (权重100，最常见)
+        opening_moves.push_back(BookEntry(Move(7, 12), 60));   // 8-13 (权重60)
+        opening_moves.push_back(BookEntry(Move(8, 13), 40));   // 9-14 (权重40)
+        opening_moves.push_back(BookEntry(Move(10, 15), 70));  // 11-16 (权重70)
+        opening_moves.push_back(BookEntry(Move(11, 16), 50));  // 12-17 (权重50)
         
         book[initial_board.hash] = opening_moves;
         
         loaded = true;
-        std::cout << "开局库已加载：" << book.size() << " 个局面" << std::endl;
+        std::cout << "开局库已初始化：" << book.size() << " 个局面" << std::endl;
     }
     
     // 从文件加载开局库
     bool load_from_file(const std::string& filename) {
         std::ifstream file(filename);
         if (!file.is_open()) {
-            std::cerr << "无法打开开局库文件: " << filename << std::endl;
+            std::cerr << "警告：无法打开开局库文件: " << filename << std::endl;
+            std::cerr << "使用内置开局库" << std::endl;
             return false;
         }
+        
+        // 清空现有数据（保留内置开局库）
+        // book.clear();
         
         // 简化的文件格式：每行一个走法序列
         // 格式：6-11 31-26 11-16 26-21 ...
         std::string line;
-        int count = 0;
+        int line_count = 0;
+        int opening_lines = 0;
         
         while (std::getline(file, line)) {
+            line_count++;
+            
+            // 跳过注释行和空行
             if (line.empty() || line[0] == '#') continue;
             
             // 解析走法序列
             Board board;
             std::istringstream iss(line);
             std::string move_str;
+            bool valid_line = true;
             
             while (iss >> move_str) {
                 Move move = Move::from_string(move_str);
-                if (!move.is_valid()) break;
+                if (!move.is_valid()) {
+                    std::cerr << "警告：第" << line_count << "行包含无效走法: " << move_str << std::endl;
+                    valid_line = false;
+                    break;
+                }
                 
                 // 将走法添加到当前局面的开局库
-                if (book.find(board.hash) == book.end()) {
-                    book[board.hash] = std::vector<Move>();
-                }
-                book[board.hash].push_back(move);
+                add_position(board.hash, move, 1);
                 
                 // 执行走法，继续下一个局面
                 board.make_move(move);
             }
             
-            count++;
+            if (valid_line && !line.empty()) {
+                opening_lines++;
+            }
         }
         
         file.close();
         loaded = true;
-        std::cout << "从文件加载开局库：" << count << " 条开局线，"
+        std::cout << "从文件加载开局库：" << opening_lines << " 条开局线，"
                   << book.size() << " 个局面" << std::endl;
         return true;
     }
     
+    // 添加单个局面和走法到开局库
+    void add_position(uint64_t hash, const Move& move, int weight = 1) {
+        auto& entries = book[hash];
+        
+        // 检查是否已存在相同走法
+        for (auto& entry : entries) {
+            if (entry.move.from == move.from && entry.move.to == move.to) {
+                // 更新权重和频率
+                entry.weight += weight;
+                entry.frequency++;
+                return;
+            }
+        }
+        
+        // 添加新走法
+        entries.emplace_back(move, weight);
+    }
+    
     // 查询开局库
-    Move probe(const Board& board) const {
+    Move probe(const Board& board) {
+        queries++;  // 更新查询统计
+        
         if (!loaded) {
             return Move();  // 未加载，返回无效走法
         }
@@ -2063,14 +2799,48 @@ public:
             return Move();  // 不在开局库中
         }
         
-        const std::vector<Move>& moves = it->second;
-        if (moves.empty()) {
+        const std::vector<BookEntry>& entries = it->second;
+        if (entries.empty()) {
             return Move();
         }
         
-        // 随机选择一个走法（增加变化）
-        int index = rand() % moves.size();
-        return moves[index];
+        hits++;  // 更新命中统计
+        
+        // 使用加权随机选择
+        return select_move(entries);
+    }
+    
+    // 从候选走法列表中选择一个走法（加权随机）
+    Move select_move(const std::vector<BookEntry>& entries) const {
+        if (entries.empty()) {
+            return Move();
+        }
+        
+        // 如果只有一个走法，直接返回
+        if (entries.size() == 1) {
+            return entries[0].move;
+        }
+        
+        // 计算总权重
+        int total_weight = 0;
+        for (const auto& entry : entries) {
+            total_weight += entry.weight;
+        }
+        
+        // 生成随机数
+        int random_value = rand() % total_weight;
+        
+        // 根据权重选择走法
+        int cumulative_weight = 0;
+        for (const auto& entry : entries) {
+            cumulative_weight += entry.weight;
+            if (random_value < cumulative_weight) {
+                return entry.move;
+            }
+        }
+        
+        // 默认返回第一个走法（不应该到达这里）
+        return entries[0].move;
     }
     
     // 检查是否在开局库中
@@ -2081,6 +2851,50 @@ public:
     // 获取统计信息
     size_t size() const {
         return book.size();
+    }
+    
+    // 获取命中率
+    double get_hit_rate() const {
+        return queries > 0 ? (double)hits / queries : 0.0;
+    }
+    
+    // 打印统计信息
+    void print_statistics() const {
+        std::cout << "\n========== 开局库统计 ==========" << std::endl;
+        std::cout << "局面数量: " << book.size() << std::endl;
+        std::cout << "总查询次数: " << queries << std::endl;
+        std::cout << "命中次数: " << hits << std::endl;
+        std::cout << "命中率: " << (get_hit_rate() * 100) << "%" << std::endl;
+        
+        // 估算节省的时间（假设每次命中节省3秒）
+        int time_saved = hits * 3;
+        std::cout << "估算节省时间: " << time_saved << " 秒" << std::endl;
+        std::cout << "================================\n" << std::endl;
+    }
+    
+    // 获取指定局面的所有候选走法
+    std::vector<Move> get_all_moves(const Board& board) const {
+        std::vector<Move> moves;
+        auto it = book.find(board.hash);
+        if (it != book.end()) {
+            for (const auto& entry : it->second) {
+                moves.push_back(entry.move);
+            }
+        }
+        return moves;
+    }
+    
+    // 清空开局库
+    void clear() {
+        book.clear();
+        queries = 0;
+        hits = 0;
+        loaded = false;
+    }
+    
+    // 检查是否已加载
+    bool is_loaded() const {
+        return loaded;
     }
 };
 
@@ -2237,9 +3051,19 @@ public:
           remaining_time_ms(total_time_ms), game_running(false),
           use_opening_book(true), use_endgame_db(true) {
         
-        // 可以尝试从文件加载开局库和残局库
-        // opening_book.load_from_file("opening_book.txt");
+        // 尝试从文件加载开局库
+        opening_book.load_from_file("opening_book.txt");
+        
+        // 尝试从文件加载残局库（可选）
         // endgame_db.load_from_file("endgame_db.bin");
+    }
+    
+    // 析构函数
+    ~CompetitionInterface() {
+        // 输出开局库统计信息
+        if (opening_book.is_loaded()) {
+            opening_book.print_statistics();
+        }
     }
     
     // 主循环
@@ -2416,7 +3240,7 @@ private:
             
             // 搜索最佳走法
             auto start = std::chrono::steady_clock::now();
-            best_move = search_engine.search(game_state.get_mutable_board(), allocated_time);
+            best_move = search_engine.search(game_state.get_mutable_board(), allocated_time, game_state.get_move_count());
             auto end = std::chrono::steady_clock::now();
             
             time_used = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
