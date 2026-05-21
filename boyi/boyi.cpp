@@ -2222,12 +2222,8 @@ private:
         if (phase == Evaluator::MIDGAME) {
             // 7a. 中心控制走法奖励（格子21,22,26,27）
             // 这些是棋盘中心的关键格子
-            const int center_squares[] = {21, 22, 26, 27};
-            for (int center_sq : center_squares) {
-                if (move.to == center_sq) {
-                    score += 50;  // 中局占据中心格子额外奖励
-                    break;
-                }
+            if (move.to == 21 || move.to == 22 || move.to == 26 || move.to == 27) {
+                score += 50;  // 中局占据中心格子额外奖励
             }
             
             // 7b. 王的活跃度走法奖励
@@ -2253,37 +2249,6 @@ private:
                 // 如果王向中心移动，给予额外奖励
                 if (to_center_dist < from_center_dist) {
                     score += 30;  // 中局王向中心移动额外奖励
-                }
-            }
-        }
-            if (move.to == 21 || move.to == 22 || move.to == 26 || move.to == 27) {
-                score += 50;  // 中心控制奖励
-            }
-            
-            // 7b. 王的活跃度奖励
-            // 检查移动的棋子是否为王
-            bool is_king = false;
-            if (is_black) {
-                is_king = (board.black_kings & from_mask) != 0;
-            } else {
-                is_king = (board.white_kings & from_mask) != 0;
-            }
-            
-            // 如果是王棋向中心移动，给予额外奖励
-            if (is_king) {
-                // 计算from和to到中心的距离
-                int from_row = move.from / 5;
-                int from_col = (move.from % 5) * 2 + (from_row % 2);
-                int to_row = move.to / 5;
-                int to_col = (move.to % 5) * 2 + (to_row % 2);
-                
-                // 计算到中心(4,4)的曼哈顿距离
-                int from_center_dist = abs(from_row - 4) + abs(from_col - 4);
-                int to_center_dist = abs(to_row - 4) + abs(to_col - 4);
-                
-                // 如果王向中心移动（距离减少），给予奖励
-                if (to_center_dist < from_center_dist) {
-                    score += 30;  // 王活跃度奖励
                 }
             }
         }
